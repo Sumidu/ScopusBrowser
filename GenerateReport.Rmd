@@ -1,0 +1,127 @@
+---
+title: "GenerateReport (Download PDF Files)"
+author: "André Calero Valdez"
+date: "8/28/2020"
+output: html_document
+---
+
+This file contains a script to download PDF files if available using the DOI. Only use this script, when you also have legal access to these files.
+
+It takes all RDS output files from the input folder and tries to find a PDF for each DOI.
+It only looks for files that are flagged as "selected".
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+
+# All RDS files in the import folder will be used
+folder_import <- "import"
+
+# URL Host for resolving DOI'S
+doi_server <- "https://sci-hub.tw/"
+
+
+
+file_list <- dir(here::here(folder_import))
+for(f in file_list){
+dall <- NULL
+  dtemp <- read_rds(here::here(folder_import, f))
+  dall <- dall %>% bind_rows(dtemp)
+}
+# Total papers
+dall %>% select(TI) %>% unique() %>% count(TI) %>% nrow()
+
+
+```
+
+## Download of files
+
+First create DOI retrieval links
+```{r}
+filtered_data <- dall %>% 
+  arrange(TI) %>% 
+  filter(selected) %>% 
+  add_count(TI) %>% filter(n >= 2) %>% 
+  mutate(link = paste0(doi_server, DI))
+```
+
+
+Generate IDs and look for first author only to generate file names.
+```{r}
+selected_data <- filtered_data %>% 
+  select(TI, link, DI, n, AU, PY) %>% 
+  unique() %>% 
+  mutate(id = 1:n()) %>% 
+  select(id, link, PY, DI, AU, TI, n) %>% 
+  rowwise() %>% 
+  separate(AU, "first_author", sep = " ", remove = FALSE, extra = "drop") %>% 
+  mutate(fname = paste(formatC(id, width=3, flag="0"), PY, first_author, TI, ".pdf", sep = "_"))
+
+# create a temp file
+write_rds(selected_data, "pdfs/selected_data.rds")
+```
+
+
+
+## Download files
+```{r scrape_files}
+library(rvest)
+get_pdf <- function(html){
+      html %>% 
+        # The relevant tag
+        html_nodes('#buttons') %>%      
+        html_nodes("a") %>% 
+        html_attr("onclick") %>% 
+        # Trim additional white space
+        str_trim() %>%                       
+        # Convert the list into a vector
+        unlist() %>% 
+        str_remove("location.href='") %>% 
+        str_sub(end = -2)# %>% 
+        #paste0("https:", .)
+  
+    }
+
+
+# remove empty links
+links_exist <- selected_data %>% filter(link!=doi_server)
+```
+
+
+```{r scrape_adaptive}
+
+# You can limit "rescraping" by changing 1 to the number of files already there
+for(i in 1:nrow(links_exist)) {
+
+  # i <- 14 # debug
+  row_data <- links_exist[i, ]
+  l <- row_data$link
+  tst <- ""
+  
+  # Can I find the pdf file?
+  try({
+    print(l)
+    tst <- read_html(l) %>% get_pdf()  
+  })
+  
+  try({
+    if(!str_starts(tst, "https:")){
+      tst <- paste0("https:",tst)
+    }
+  })
+  
+  
+  # create a name
+  fname <- here::here("pdfs", paste0(row_data$fname))
+  
+  
+  # delay 1+N(1,.5) seconds, 
+  Sys.sleep(abs(rnorm(n = 1, m = 1, sd = 0.5)+1))
+  try({
+    download.file(tst, fname, mode="wb")
+  })
+}
+
+println("Done.")
+```
+
